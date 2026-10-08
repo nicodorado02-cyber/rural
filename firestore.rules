@@ -1,0 +1,108 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function hasProfile() {
+      return signedIn()
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid));
+    }
+
+    function activeUser() {
+      return hasProfile()
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.disabled != true;
+    }
+
+    function isAdmin() {
+      return activeUser()
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+    }
+
+    function ownsRecord() {
+      return activeUser() && resource.data.ownerId == request.auth.uid;
+    }
+
+    function createsOwnRecord() {
+      return activeUser()
+        && request.resource.data.ownerId == request.auth.uid
+        && request.resource.data.ownerEmail == request.auth.token.email;
+    }
+
+    match /users/{userId} {
+      allow get: if signedIn() && (request.auth.uid == userId || isAdmin());
+      allow list: if isAdmin();
+      allow create: if signedIn()
+        && request.auth.uid == userId
+        && request.resource.data.role == 'user'
+        && request.resource.data.disabled == false
+        && request.resource.data.email == request.auth.token.email;
+      allow update: if isAdmin()
+        || (activeUser()
+          && request.auth.uid == userId
+          && request.resource.data.role == resource.data.role
+          && request.resource.data.disabled == resource.data.disabled
+          && request.resource.data.email == resource.data.email);
+      allow delete: if false;
+    }
+
+    match /procedures/{itemId} {
+      allow read: if activeUser();
+      allow create, update, delete: if isAdmin();
+    }
+
+    match /lessons/{itemId} {
+      allow read: if activeUser();
+      allow create, update, delete: if isAdmin();
+    }
+
+    match /farms/{farmId} {
+      allow read: if activeUser();
+      allow create: if isAdmin() || createsOwnRecord();
+      allow update: if isAdmin()
+        || (ownsRecord()
+          && request.resource.data.ownerId == resource.data.ownerId
+          && request.resource.data.ownerEmail == resource.data.ownerEmail);
+      allow delete: if isAdmin() || ownsRecord();
+    }
+
+    match /bookings/{bookingId} {
+      allow create: if createsOwnRecord();
+      allow read: if isAdmin() || ownsRecord();
+      allow update: if isAdmin();
+      allow delete: if isAdmin() || ownsRecord();
+    }
+
+    match /invoices/{invoiceId} {
+      allow create: if createsOwnRecord();
+      allow read: if isAdmin() || ownsRecord();
+      allow update: if isAdmin();
+      allow delete: if isAdmin() || ownsRecord();
+    }
+
+    match /processes/{processId} {
+      allow create: if createsOwnRecord();
+      allow read: if isAdmin() || ownsRecord();
+      allow update: if isAdmin() || (ownsRecord()
+        && request.resource.data.ownerId == resource.data.ownerId
+        && request.resource.data.ownerEmail == resource.data.ownerEmail);
+      allow delete: if isAdmin() || ownsRecord();
+    }
+
+    match /pqrs/{requestId} {
+      allow create: if createsOwnRecord()
+        && request.resource.data.status == 'Pendiente'
+        && !('reply' in request.resource.data);
+      allow read: if isAdmin() || ownsRecord();
+      allow update: if isAdmin();
+      allow delete: if isAdmin();
+    }
+
+    match /contacts/{messageId} {
+      allow create: if createsOwnRecord();
+      allow read: if isAdmin() || ownsRecord();
+      allow update, delete: if isAdmin();
+    }
+  }
+}
