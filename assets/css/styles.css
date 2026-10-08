@@ -89,8 +89,7 @@ button { cursor: pointer; }
 .demo-entry > .button { width: 100%; }
 .demo-entry .hint { margin-bottom: 0; }
 .demo-banner { position: sticky; top: 0; z-index: 5; display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 8px 16px; padding: 10px 16px; border-bottom: 1px solid #b99d43; background: #fff3c2; color: #382d0d; font-weight: 700; text-align: center; }
-.demo-role-panel { max-width: 720px; margin: 0 auto; }
-.demo-role-panel .page-heading { font-size: 2rem; }
+.demo-banner > span { overflow-wrap: anywhere; }
 .demo-options { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
 .demo-options .button { flex: 1; }
 .role-picker { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin: 16px 0; }
@@ -184,6 +183,9 @@ body.dark-mode .step-indicator .current .step-number, body.dark-mode .step-indic
 @media (max-width: 420px) {
   .role-picker { grid-template-columns: 1fr; }
   .role-picker .button { min-height: 50px; }
+  .demo-banner { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; padding-inline: 12px; }
+  .demo-banner > span { grid-column: 1 / -1; }
+  .demo-banner .button { width: 100%; min-width: 0; padding-inline: 8px; overflow-wrap: anywhere; }
 }
 
 @media (prefers-reduced-motion: reduce) {

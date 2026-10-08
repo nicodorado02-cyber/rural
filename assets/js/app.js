@@ -27,7 +27,11 @@
   ];
   const adminPage = ["admin", "Administración", "⚙"];
   let state = loadState();
-  let view = state.session ? "home" : publicDemoActive ? "demo-role" : "login";
+  if (publicDemoActive && !state.session) {
+    const demoUser = state.users.find((user) => user.role === "user");
+    if (demoUser) state.session = { ...demoUser, demoOnly: true };
+  }
+  let view = state.session ? "home" : "login";
   let loginMode = false;
   let requestedRole = "user";
   let requestedRegistrationRole = "user";
@@ -172,8 +176,9 @@
     stopFirebaseListeners();
     cloudSnapshot = null;
     state = demoDefaults();
-    state.session = null;
-    view = "demo-role";
+    const demoUser = state.users.find((user) => user.role === "user");
+    state.session = demoUser ? { ...demoUser, demoOnly: true } : null;
+    view = "home";
     loginMode = false;
     registrationNotice = "";
     loginErrorMessage = "";
@@ -389,7 +394,7 @@
     const items = isAdmin() ? [...pages, adminPage] : pages;
     nav.innerHTML = items.map(([id, label, icon]) => `<a class="nav-link" href="#${id}" data-route="${id}" ${view === id ? 'aria-current="page"' : ""}><span aria-hidden="true">${icon}</span> ${label}</a>`).join("");
     nav.hidden = !state.session;
-    logoutButton.hidden = !state.session;
+    logoutButton.hidden = !state.session || publicDemoActive;
   }
 
   function render() {
@@ -404,12 +409,12 @@
     const renderers = {
       login: renderLogin, home: renderHome, procedures: renderProcedures, tourism: renderTourism,
       learning: renderLearning, billing: renderBilling, processes: renderProcesses,
-      pqrs: renderPqrs, contact: renderContact, admin: renderAdmin, "demo-role": renderDemoRolePicker
+      pqrs: renderPqrs, contact: renderContact, admin: renderAdmin
     };
     const routeDenied = view === "admin" && !isAdmin();
     if (routeDenied) view = state.session ? "home" : "login";
     const demoBanner = demoMode
-      ? `<aside class="demo-banner" role="status"><span>Modo demostración: los datos no se guardan en la nube.</span><button class="button secondary small" type="button" data-exit-demo>Salir de la demo</button></aside>`
+      ? `<aside class="demo-banner" role="region" aria-label="Modo demostración"><span>Modo demostración: los datos no se guardan en la nube.</span>${state.session ? `<button class="button secondary small" type="button" data-toggle-demo-role>${isAdmin() ? "Ver como usuario" : "Ver como administrador"}</button>` : ""}<button class="button secondary small" type="button" data-exit-demo>Salir de la demo</button></aside>`
       : "";
     main.innerHTML = `${demoBanner}${(renderers[view] || renderHome)()}`;
     if (routeDenied) announce("Acceso denegado", true);
@@ -439,10 +444,6 @@
       ${!loginMode ? `<div class="demo-entry"><button class="button secondary" type="button" data-start-demo>Probar en modo demostración</button><p class="hint">Explora la página sin crear cuenta. Los datos no se guardan en la nube.</p></div>` : ""}
       <p class="hint">${usingFirebaseData() ? "Firebase gestiona tu contraseña. El rol se consulta desde tu perfil y los datos se guardan en la nube." : "Demostración local: no verifica contraseñas ni protege datos reales. No uses información privada."}</p>
       </section></div></div>`;
-  }
-
-  function renderDemoRolePicker() {
-    return `<div class="page-wrap"><section class="login-panel demo-role-panel"><p class="eyebrow">Exploración local</p><h1 class="page-heading">¿Qué vista quieres explorar?</h1><p class="lead">Estas opciones usan cuentas ficticias y solo cambian las pantallas de demostración.</p><div class="role-picker" role="group" aria-label="Vista de demostración"><button class="button secondary" type="button" data-demo-role="user">Ver como usuario</button><button class="button secondary" type="button" data-demo-role="admin">Ver como administrador</button></div></section></div>`;
   }
 
   function renderHome() {
@@ -651,19 +652,21 @@
   document.addEventListener("click", (event) => {
     const exitDemoButton = event.target.closest("[data-exit-demo]");
     if (exitDemoButton) { exitPublicDemo(); return; }
-    const startDemoButton = event.target.closest("[data-start-demo]");
-    if (startDemoButton) { startPublicDemo(); return; }
-    const demoRoleButton = event.target.closest("[data-demo-role]");
-    if (demoRoleButton && publicDemoActive) {
-      const user = state.users.find((item) => item.role === demoRoleButton.dataset.demoRole);
+    const toggleDemoRoleButton = event.target.closest("[data-toggle-demo-role]");
+    if (toggleDemoRoleButton && demoMode && state.session) {
+      const nextRole = isAdmin() ? "user" : "admin";
+      const user = state.users.find((item) => item.role === nextRole);
       if (user) {
-        state.session = { ...user, demoOnly: true };
+        state.session = { ...user, demoOnly: publicDemoActive };
         view = "home";
         save();
         render();
+        main.focus({ preventScroll: true });
       }
       return;
     }
+    const startDemoButton = event.target.closest("[data-start-demo]");
+    if (startDemoButton) { startPublicDemo(); return; }
     const route = event.target.closest("[data-route]");
     if (route) { event.preventDefault(); if (route.dataset.adminTab) adminTab = route.dataset.adminTab; setRoute(route.dataset.route); return; }
     const loginButton = event.target.closest("[data-login]");
@@ -944,8 +947,9 @@
     registrationNotice = "";
     loginErrorMessage = "";
     if (publicDemoActive) {
-      state.session = null;
-      view = "demo-role";
+      const demoUser = state.users.find((user) => user.role === "user");
+      state.session = demoUser ? { ...demoUser, demoOnly: true } : null;
+      view = "home";
       save();
       render();
       return;
