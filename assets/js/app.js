@@ -5,14 +5,19 @@
   const fontToggle = document.querySelector("#font-toggle");
   const themeToggle = document.querySelector("#theme-toggle");
   const storageKey = "agroconecta-demo-v1";
+  const publicDemoStorageKey = "agroconecta-public-demo-v1";
   const firebaseConfig = window.AgroFirebaseConfig || {};
   const firebaseEnabled = Boolean(window.firebase && firebaseConfig.apiKey && !firebaseConfig.apiKey.startsWith("REEMPLAZAR") && firebaseConfig.projectId && !firebaseConfig.projectId.startsWith("REEMPLAZAR"));
-  const firebaseAuth = firebaseEnabled ? (firebase.initializeApp(firebaseConfig), firebase.auth()) : null;
-  const firestore = firebaseEnabled ? firebase.firestore() : null;
+  let publicDemoActive = hasStoredPublicDemo();
+  let demoMode = !firebaseEnabled || publicDemoActive;
+  const firebaseApp = firebaseEnabled ? firebase.initializeApp(firebaseConfig) : null;
+  let firebaseAuth = null;
+  let firestore = null;
   let cloudSnapshot = null;
   let cloudQueue = Promise.resolve();
   let profileSubscription = null;
-  let authReady = !firebaseEnabled;
+  let authSubscription = null;
+  let authReady = !firebaseEnabled || publicDemoActive;
   let firebaseRegistrationPending = false;
   let loginErrorMessage = "";
   const pages = [
@@ -22,7 +27,7 @@
   ];
   const adminPage = ["admin", "Administración", "⚙"];
   let state = loadState();
-  let view = state.session ? "home" : "login";
+  let view = state.session ? "home" : publicDemoActive ? "demo-role" : "login";
   let loginMode = false;
   let requestedRole = "user";
   let requestedRegistrationRole = "user";
@@ -36,10 +41,15 @@
   let adminTab = "overview";
   let invoiceDraft = { name: "", document: "", product: "", quantity: 1, price: 0, note: "" };
 
-  function defaults() {
+  function hasStoredPublicDemo() {
+    try { return JSON.parse(localStorage.getItem(publicDemoStorageKey))?.mode === "public-demo"; }
+    catch (error) { return false; }
+  }
+
+  function demoDefaults() {
     return {
       session: null,
-      users: firebaseEnabled ? [] : [
+      users: [
         { id: "demo-admin", email: "admin@demo.com", name: "Rosa Administradora", role: "admin", adminRequest: "no_solicitada", disabled: false },
         { id: "demo-user", email: "usuario@demo.com", name: "María Productora", role: "user", adminRequest: "no_solicitada", disabled: false }
       ],
@@ -50,36 +60,52 @@
     };
   }
 
+  function defaults() {
+    const initial = demoDefaults();
+    return { ...initial, users: firebaseEnabled ? [] : initial.users };
+  }
+
   function loadState() {
+    if (publicDemoActive) {
+      try {
+        const saved = JSON.parse(localStorage.getItem(publicDemoStorageKey));
+        return hydrateLocalState(saved?.state || {}, demoDefaults());
+      } catch (error) {
+        return demoDefaults();
+      }
+    }
     if (firebaseEnabled) return defaults();
     try {
       const saved = JSON.parse(localStorage.getItem(storageKey));
       if (!saved) return defaults();
-      const initial = defaults();
-      const users = (saved.users || initial.users).map((user, index) => ({
-        ...user,
-        id: user.id || `legacy-user-${index}`,
-        adminRequest: user.adminRequest || "no_solicitada",
-        disabled: Boolean(user.disabled)
-      }));
-      const sessionUser = saved.session ? users.find((user) => user.email === saved.session.email) : null;
-      return {
-        ...initial,
-        ...saved,
-        users,
-        session: sessionUser || null,
-        contacts: saved.contacts || [],
-        pqrs: (saved.pqrs || []).map((item) => ({
-          ...item,
-          status: ({ "Recibida": "Pendiente", "En revisión": "En proceso", "Respondida": "Resuelta" })[item.status] || item.status || "Pendiente"
-        })),
-        procedures: mergeCatalog(initial.procedures, saved.procedures),
-        farms: mergeCatalog(initial.farms, saved.farms),
-        lessons: mergeCatalog(initial.lessons, saved.lessons)
-      };
+      return hydrateLocalState(saved, defaults());
     } catch (error) {
       return defaults();
     }
+  }
+
+  function hydrateLocalState(saved, initial) {
+    const users = (saved.users || initial.users).map((user, index) => ({
+      ...user,
+      id: user.id || `legacy-user-${index}`,
+      adminRequest: user.adminRequest || "no_solicitada",
+      disabled: Boolean(user.disabled)
+    }));
+    const sessionUser = saved.session ? users.find((user) => user.email === saved.session.email) : null;
+    return {
+      ...initial,
+      ...saved,
+      users,
+      session: sessionUser || null,
+      contacts: saved.contacts || [],
+      pqrs: (saved.pqrs || []).map((item) => ({
+        ...item,
+        status: ({ "Recibida": "Pendiente", "En revisión": "En proceso", "Respondida": "Resuelta" })[item.status] || item.status || "Pendiente"
+      })),
+      procedures: mergeCatalog(initial.procedures, saved.procedures),
+      farms: mergeCatalog(initial.farms, saved.farms),
+      lessons: mergeCatalog(initial.lessons, saved.lessons)
+    };
   }
 
   function mergeCatalog(initialItems, savedItems = []) {
@@ -92,6 +118,11 @@
   }
 
   function save() {
+    if (publicDemoActive) {
+      try { localStorage.setItem(publicDemoStorageKey, JSON.stringify({ mode: "public-demo", state })); }
+      catch (error) { announce("No fue posible guardar los datos de demostración en este navegador."); }
+      return;
+    }
     if (firebaseEnabled) {
       if (firebaseAuth.currentUser && cloudSnapshot) {
         cloudQueue = cloudQueue.then(persistCloudState).catch(() => announce("No fue posible sincronizar los cambios con Firebase."));
@@ -100,6 +131,79 @@
     }
     try { localStorage.setItem(storageKey, JSON.stringify(state)); }
     catch (error) { announce("No fue posible guardar los cambios en este navegador."); }
+  }
+
+  function stopFirebaseListeners() {
+    if (authSubscription) { authSubscription(); authSubscription = null; }
+    if (profileSubscription) { profileSubscription(); profileSubscription = null; }
+  }
+
+  function startFirebaseAuth() {
+    if (!firebaseEnabled || demoMode || authSubscription) return;
+    firebaseAuth = firebaseApp.auth();
+    firestore = firebaseApp.firestore();
+    authReady = false;
+    render();
+    firebaseAuth.setPersistence(firebase.auth.Auth.Persistence.LOCAL).then(() => {
+      if (demoMode || authSubscription) return;
+      authSubscription = firebaseAuth.onAuthStateChanged((authUser) => {
+        if (demoMode || firebaseRegistrationPending) return;
+        if (!authUser) {
+          if (profileSubscription) { profileSubscription(); profileSubscription = null; }
+          state.session = null;
+          view = "login";
+          authReady = true;
+          render();
+          return;
+        }
+        bootstrapFirebaseUser(authUser);
+      });
+    }).catch(() => {
+      if (demoMode) return;
+      authReady = true;
+      loginErrorMessage = "No fue posible inicializar Firebase Authentication.";
+      render();
+    });
+  }
+
+  function startPublicDemo() {
+    publicDemoActive = true;
+    demoMode = true;
+    stopFirebaseListeners();
+    cloudSnapshot = null;
+    state = demoDefaults();
+    state.session = null;
+    view = "demo-role";
+    loginMode = false;
+    registrationNotice = "";
+    loginErrorMessage = "";
+    selectedProcedure = "";
+    bookingFarm = "";
+    editingFarmId = "";
+    authReady = true;
+    save();
+    render();
+  }
+
+  function exitPublicDemo() {
+    try {
+      localStorage.removeItem(publicDemoStorageKey);
+      if (!firebaseEnabled) localStorage.removeItem(storageKey);
+    }
+    catch (error) { announce("No fue posible borrar los datos de demostración."); return; }
+    stopFirebaseListeners();
+    publicDemoActive = false;
+    demoMode = !firebaseEnabled;
+    cloudSnapshot = null;
+    state = defaults();
+    view = "login";
+    loginMode = false;
+    requestedRole = "user";
+    registrationNotice = "";
+    loginErrorMessage = "";
+    authReady = !firebaseEnabled;
+    render();
+    if (firebaseEnabled) startFirebaseAuth();
   }
 
   const cloudCollections = {
@@ -127,6 +231,7 @@
   }
 
   async function bootstrapFirebaseUser(authUser) {
+    if (demoMode) return;
     try {
       const profileReference = firestore.collection("users").doc(authUser.uid);
       let profileDocument = await profileReference.get();
@@ -160,6 +265,7 @@
         loadCloudCollection("pqrs", authUser.uid, administrator),
         loadCloudCollection("contacts", authUser.uid, administrator)
       ]);
+      if (demoMode) return;
       state = {
         ...state, session, users,
         procedures: mergeCatalog(window.AgroData.procedures, procedures),
@@ -170,6 +276,7 @@
       cloudSnapshot = cloudStateSnapshot();
       if (profileSubscription) profileSubscription();
       profileSubscription = firestore.collection("users").doc(authUser.uid).onSnapshot((document) => {
+        if (demoMode) return;
         if (!document.exists || document.data().disabled) {
           loginErrorMessage = "Esta cuenta está desactivada. Contacta con administración.";
           firebaseAuth.signOut();
@@ -189,6 +296,7 @@
       authReady = true;
       render();
     } catch (error) {
+      if (demoMode) return;
       if (firebaseAuth.currentUser) await firebaseAuth.signOut();
       state.session = null;
       view = "login";
@@ -201,7 +309,7 @@
   }
 
   async function persistCloudState() {
-    if (!firebaseEnabled || !firebaseAuth.currentUser || !cloudSnapshot) return;
+    if (!firebaseEnabled || demoMode || publicDemoActive || !firebaseAuth?.currentUser || !cloudSnapshot) return;
     const uid = firebaseAuth.currentUser.uid;
     const administrator = isAdmin();
     const currentSnapshot = cloudStateSnapshot();
@@ -257,6 +365,8 @@
 
   function isAdmin() { return state.session?.role === "admin"; }
 
+  function usingFirebaseData() { return firebaseEnabled && !demoMode; }
+
   function visibleRecords(records) {
     if (isAdmin()) return records;
     return records.filter((item) => item.ownerId === state.session?.id);
@@ -294,13 +404,16 @@
     const renderers = {
       login: renderLogin, home: renderHome, procedures: renderProcedures, tourism: renderTourism,
       learning: renderLearning, billing: renderBilling, processes: renderProcesses,
-      pqrs: renderPqrs, contact: renderContact, admin: renderAdmin
+      pqrs: renderPqrs, contact: renderContact, admin: renderAdmin, "demo-role": renderDemoRolePicker
     };
     const routeDenied = view === "admin" && !isAdmin();
     if (routeDenied) view = state.session ? "home" : "login";
-    main.innerHTML = (renderers[view] || renderHome)();
+    const demoBanner = demoMode
+      ? `<aside class="demo-banner" role="status"><span>Modo demostración: los datos no se guardan en la nube.</span><button class="button secondary small" type="button" data-exit-demo>Salir de la demo</button></aside>`
+      : "";
+    main.innerHTML = `${demoBanner}${(renderers[view] || renderHome)()}`;
     if (routeDenied) announce("Acceso denegado", true);
-    if (firebaseEnabled && view === "tourism") {
+    if (usingFirebaseData() && view === "tourism") {
       const bookingHint = main.querySelector("#booking-form .hint");
       if (bookingHint) bookingHint.textContent = "La solicitud se guarda en tu cuenta; no se envía directamente a la finca.";
     }
@@ -323,8 +436,13 @@
         <button class="button" type="submit">${loginMode ? "Crear mi cuenta" : "Iniciar sesión"}</button>
       </form>
       ${requestedRole === "user" || loginMode ? `<button class="text-button" type="button" data-action="toggle-register">${loginMode ? "Ya tengo una cuenta" : "Crear cuenta"}</button>` : ""}
-      <p class="hint">${firebaseEnabled ? "Firebase gestiona tu contraseña. El rol se consulta desde tu perfil y los datos se guardan en la nube." : "Demostración local: no verifica contraseñas ni protege datos reales. No uses información privada."}</p>
+      ${!loginMode ? `<div class="demo-entry"><button class="button secondary" type="button" data-start-demo>Probar en modo demostración</button><p class="hint">Explora la página sin crear cuenta. Los datos no se guardan en la nube.</p></div>` : ""}
+      <p class="hint">${usingFirebaseData() ? "Firebase gestiona tu contraseña. El rol se consulta desde tu perfil y los datos se guardan en la nube." : "Demostración local: no verifica contraseñas ni protege datos reales. No uses información privada."}</p>
       </section></div></div>`;
+  }
+
+  function renderDemoRolePicker() {
+    return `<div class="page-wrap"><section class="login-panel demo-role-panel"><p class="eyebrow">Exploración local</p><h1 class="page-heading">¿Qué vista quieres explorar?</h1><p class="lead">Estas opciones usan cuentas ficticias y solo cambian las pantallas de demostración.</p><div class="role-picker" role="group" aria-label="Vista de demostración"><button class="button secondary" type="button" data-demo-role="user">Ver como usuario</button><button class="button secondary" type="button" data-demo-role="admin">Ver como administrador</button></div></section></div>`;
   }
 
   function renderHome() {
@@ -405,7 +523,7 @@
 
   function renderFarmEditor() {
     const ownFarm = state.farms.find((item) => item.id === editingFarmId && item.ownerId === state.session.id);
-    return `<section class="panel farm-editor"><h2>${ownFarm ? "Editar mi finca" : "Publicar mi finca"}</h2><form id="farm-owner-form"><div class="grid grid-2"><div class="field"><label for="owner-farm-name">Nombre de la finca</label><input id="owner-farm-name" name="name" value="${esc(ownFarm?.name || "")}" required maxlength="100"></div><div class="field"><label for="owner-farm-place">Municipio o vereda</label><input id="owner-farm-place" name="place" value="${esc(ownFarm?.place || "")}" required maxlength="100"></div></div><div class="field"><label for="owner-farm-description">Descripción</label><textarea id="owner-farm-description" name="description" required maxlength="500">${esc(ownFarm?.description || "")}</textarea></div><div class="field"><label for="owner-farm-price">Precio de referencia por persona</label><input id="owner-farm-price" name="price" type="number" min="0" value="${Number(ownFarm?.price) || ""}" required></div><div class="button-row"><button class="button" type="submit">${ownFarm ? "Guardar cambios" : "Publicar finca"}</button>${ownFarm ? `<button class="button secondary" type="button" data-action="cancel-farm-edit">Cancelar</button>` : ""}</div></form><p class="hint">${firebaseEnabled ? "El anuncio se guarda en Firestore y se muestra en el catálogo." : "Esta demostración publica el anuncio en el navegador actual."}</p></section>`;
+    return `<section class="panel farm-editor"><h2>${ownFarm ? "Editar mi finca" : "Publicar mi finca"}</h2><form id="farm-owner-form"><div class="grid grid-2"><div class="field"><label for="owner-farm-name">Nombre de la finca</label><input id="owner-farm-name" name="name" value="${esc(ownFarm?.name || "")}" required maxlength="100"></div><div class="field"><label for="owner-farm-place">Municipio o vereda</label><input id="owner-farm-place" name="place" value="${esc(ownFarm?.place || "")}" required maxlength="100"></div></div><div class="field"><label for="owner-farm-description">Descripción</label><textarea id="owner-farm-description" name="description" required maxlength="500">${esc(ownFarm?.description || "")}</textarea></div><div class="field"><label for="owner-farm-price">Precio de referencia por persona</label><input id="owner-farm-price" name="price" type="number" min="0" value="${Number(ownFarm?.price) || ""}" required></div><div class="button-row"><button class="button" type="submit">${ownFarm ? "Guardar cambios" : "Publicar finca"}</button>${ownFarm ? `<button class="button secondary" type="button" data-action="cancel-farm-edit">Cancelar</button>` : ""}</div></form><p class="hint">${usingFirebaseData() ? "El anuncio se guarda en Firestore y se muestra en el catálogo." : "Esta demostración publica el anuncio en el navegador actual."}</p></section>`;
   }
 
   function renderLearning() {
@@ -433,17 +551,17 @@
       ...visibleRecords(state.invoices).map((item) => ({ ...item, label: `${item.number} · ${item.name}`, type: "invoice" })),
       ...visibleRecords(state.pqrs).map((item) => ({ ...item, label: `${item.number} · ${item.subject}`, type: "pqrs" }))
     ].reverse();
-    return `<div class="page-wrap"><p class="eyebrow">Tu actividad</p><h1 class="page-heading">Mis procesos</h1><p class="lead">${firebaseEnabled ? "Consulta tus actividades guardadas en tu cuenta." : "Consulta tus prácticas, reservas y solicitudes guardadas en este dispositivo."}</p><section class="panel">${records.length ? `<ul class="record-list">${records.map((item) => `<li><span><strong>${esc(item.label || "Actividad")}</strong><br><span class="muted">${esc(item.date || "Fecha no disponible")}</span></span><span class="status ${item.status === "Completado" ? "done" : ""}">${esc(item.status || "Guardado")}</span></li>`).join("")}</ul>` : `<p>Aún no tienes actividades. Puedes empezar con una práctica de trámite o una lección.</p><a class="button" href="#procedures" data-route="procedures">Ver trámites</a>`}</section></div>`;
+    return `<div class="page-wrap"><p class="eyebrow">Tu actividad</p><h1 class="page-heading">Mis procesos</h1><p class="lead">${usingFirebaseData() ? "Consulta tus actividades guardadas en tu cuenta." : "Consulta tus prácticas, reservas y solicitudes guardadas en este dispositivo."}</p><section class="panel">${records.length ? `<ul class="record-list">${records.map((item) => `<li><span><strong>${esc(item.label || "Actividad")}</strong><br><span class="muted">${esc(item.date || "Fecha no disponible")}</span></span><span class="status ${item.status === "Completado" ? "done" : ""}">${esc(item.status || "Guardado")}</span></li>`).join("")}</ul>` : `<p>Aún no tienes actividades. Puedes empezar con una práctica de trámite o una lección.</p><a class="button" href="#procedures" data-route="procedures">Ver trámites</a>`}</section></div>`;
   }
 
   function renderPqrs() {
     const requests = visibleRecords(state.pqrs);
-    return `<div class="page-wrap"><p class="eyebrow">Estamos para escucharte</p><h1 class="page-heading">Peticiones y ayuda</h1><p class="lead">Cuéntanos qué necesitas. Recibirás un número de radicado para consultar el estado ${firebaseEnabled ? "en tu cuenta" : "en este dispositivo"}.</p><div class="grid grid-2"><section class="panel"><h2>Escribir una solicitud</h2><form id="pqrs-form"><div class="field"><label for="pqrs-type">Tipo de solicitud</label><select id="pqrs-type" name="type"><option>Petición</option><option>Queja</option><option>Reclamo</option><option>Sugerencia</option></select></div><div class="field"><label for="pqrs-subject">Tema</label><input id="pqrs-subject" name="subject" required maxlength="80"></div><div class="field"><label for="pqrs-message">¿Cómo podemos ayudarte?</label><textarea id="pqrs-message" name="message" required maxlength="1000"></textarea></div><button class="button" type="submit">Radicar solicitud</button><p class="hint">No incluyas claves ni datos bancarios. La solicitud no se envía a una entidad pública desde esta plataforma.</p></form></section>
+    return `<div class="page-wrap"><p class="eyebrow">Estamos para escucharte</p><h1 class="page-heading">Peticiones y ayuda</h1><p class="lead">Cuéntanos qué necesitas. Recibirás un número de radicado para consultar el estado ${usingFirebaseData() ? "en tu cuenta" : "en este dispositivo"}.</p><div class="grid grid-2"><section class="panel"><h2>Escribir una solicitud</h2><form id="pqrs-form"><div class="field"><label for="pqrs-type">Tipo de solicitud</label><select id="pqrs-type" name="type"><option>Petición</option><option>Queja</option><option>Reclamo</option><option>Sugerencia</option></select></div><div class="field"><label for="pqrs-subject">Tema</label><input id="pqrs-subject" name="subject" required maxlength="80"></div><div class="field"><label for="pqrs-message">¿Cómo podemos ayudarte?</label><textarea id="pqrs-message" name="message" required maxlength="1000"></textarea></div><button class="button" type="submit">Radicar solicitud</button><p class="hint">No incluyas claves ni datos bancarios. La solicitud no se envía a una entidad pública desde esta plataforma.</p></form></section>
       <section class="panel"><h2>Mis radicados</h2>${requests.length ? `<ul class="record-list">${[...requests].reverse().map((item) => `<li><span><strong>${esc(item.number)}</strong><br>${esc(item.type)} · ${esc(item.subject)}${item.reply ? `<br><span class="muted">Respuesta: ${esc(item.reply)}</span>` : ""}</span><span class="status">${esc(item.status)}</span></li>`).join("")}</ul>` : `<p class="muted">Cuando radiques una solicitud, aparecerá aquí su número y estado.</p>`}</section></div></div>`;
   }
 
   function renderContact() {
-    return `<div class="page-wrap"><p class="eyebrow">Cerca de ti</p><h1 class="page-heading">Contacto y alianzas</h1><p class="lead">Busca orientación en los canales oficiales de tu municipio o de la entidad correspondiente.</p><div class="notice">AgroConecta Rural es un prototipo educativo. Los enlaces son informativos y las entidades aquí mencionadas no necesariamente tienen una alianza con este proyecto.</div><div class="section-title"><h2>Entidades para consultar</h2></div>${alliesMarkup()}<div class="section-title"><h2>Escríbenos</h2></div><section class="panel"><form id="contact-form"><div class="field"><label for="contact-subject">Asunto</label><input id="contact-subject" name="subject" required maxlength="100"></div><div class="field"><label for="contact-message">Mensaje</label><textarea id="contact-message" name="message" required maxlength="1000"></textarea></div><button class="button" type="submit">Enviar mensaje</button><p class="hint">${firebaseEnabled ? "El mensaje se guarda en tu cuenta de AgroConecta." : "El mensaje se guarda solo en este navegador."}</p></form></section></div>`;
+    return `<div class="page-wrap"><p class="eyebrow">Cerca de ti</p><h1 class="page-heading">Contacto y alianzas</h1><p class="lead">Busca orientación en los canales oficiales de tu municipio o de la entidad correspondiente.</p><div class="notice">AgroConecta Rural es un prototipo educativo. Los enlaces son informativos y las entidades aquí mencionadas no necesariamente tienen una alianza con este proyecto.</div><div class="section-title"><h2>Entidades para consultar</h2></div>${alliesMarkup()}<div class="section-title"><h2>Escríbenos</h2></div><section class="panel"><form id="contact-form"><div class="field"><label for="contact-subject">Asunto</label><input id="contact-subject" name="subject" required maxlength="100"></div><div class="field"><label for="contact-message">Mensaje</label><textarea id="contact-message" name="message" required maxlength="1000"></textarea></div><button class="button" type="submit">Enviar mensaje</button><p class="hint">${usingFirebaseData() ? "El mensaje se guarda en tu cuenta de AgroConecta." : "El mensaje se guarda solo en este navegador."}</p></form></section></div>`;
   }
 
   function renderAdmin() {
@@ -451,16 +569,16 @@
     const counts = [["Cuentas de usuario", state.users.filter((user) => !user.disabled).length], ["Fincas publicadas", state.farms.length], ["Trámites de práctica", state.procedures.length], ["PQRS pendientes", state.pqrs.filter((item) => item.status === "Pendiente").length]];
     const tabs = [["overview", "Resumen"], ["users", "Usuarios"], ["admin-requests", "Solicitudes de administrador"], ["records", "Cobros y procesos"], ["content", "Contenido"], ["pqrs", "PQRS"], ["contacts", "Contacto"]];
     let body = "";
-    if (adminTab === "overview") body = `<div class="grid grid-2">${counts.map(([label, number]) => `<div class="stat"><strong>${number}</strong><span>${label}</span></div>`).join("")}</div><p class="hint">${firebaseEnabled ? "Los datos se cargan desde Firestore según el rol y la propiedad." : "Los datos son locales a este navegador y sirven para demostrar los roles."}</p>`;
-    if (adminTab === "users") body = `<h2>${firebaseEnabled ? "Usuarios" : "Usuarios de demostración"}</h2><div class="table-wrap"><table><thead><tr><th>Nombre</th><th>Correo</th><th>Rol</th><th>Cuenta</th></tr></thead><tbody>${state.users.map((user, index) => `<tr><td>${esc(user.name)}</td><td>${esc(user.email)}</td><td><label class="sr-only" for="role-${index}">Rol de ${esc(user.email)}</label><select id="role-${index}" data-user-role="${esc(user.id)}" ${user.id === state.session.id ? "disabled" : ""}><option value="user" ${user.role !== "admin" ? "selected" : ""}>Usuario</option><option value="admin" ${user.role === "admin" ? "selected" : ""}>Administrador</option></select></td><td><button class="button secondary small" type="button" data-toggle-user="${esc(user.id)}" ${user.id === state.session.id ? "disabled" : ""}>${user.disabled ? "Activar" : "Desactivar"}</button></td></tr>`).join("")}</tbody></table></div>`;
+    if (adminTab === "overview") body = `<div class="grid grid-2">${counts.map(([label, number]) => `<div class="stat"><strong>${number}</strong><span>${label}</span></div>`).join("")}</div><p class="hint">${usingFirebaseData() ? "Los datos se cargan desde Firestore según el rol y la propiedad." : "Los datos son locales a este navegador y sirven para demostrar los roles."}</p>`;
+    if (adminTab === "users") body = `<h2>${usingFirebaseData() ? "Usuarios" : "Usuarios de demostración"}</h2><div class="table-wrap"><table><thead><tr><th>Nombre</th><th>Correo</th><th>Rol</th><th>Cuenta</th></tr></thead><tbody>${state.users.map((user, index) => `<tr><td>${esc(user.name)}</td><td>${esc(user.email)}</td><td><label class="sr-only" for="role-${index}">Rol de ${esc(user.email)}</label><select id="role-${index}" data-user-role="${esc(user.id)}" ${user.id === state.session.id ? "disabled" : ""}><option value="user" ${user.role !== "admin" ? "selected" : ""}>Usuario</option><option value="admin" ${user.role === "admin" ? "selected" : ""}>Administrador</option></select></td><td><button class="button secondary small" type="button" data-toggle-user="${esc(user.id)}" ${user.id === state.session.id ? "disabled" : ""}>${user.disabled ? "Activar" : "Desactivar"}</button></td></tr>`).join("")}</tbody></table></div>`;
     if (adminTab === "admin-requests") body = renderAdminRequests();
-    if (adminTab === "content") body = `<h2>${firebaseEnabled ? "Gestionar catálogos" : "Administrar el contenido de esta demo"}</h2><div class="grid grid-3"><form class="panel" id="add-farm-form"><h3>Añadir una finca</h3><div class="field"><label for="new-farm-name">Nombre</label><input id="new-farm-name" name="name" required></div><div class="field"><label for="new-farm-place">Municipio</label><input id="new-farm-place" name="place" required></div><div class="field"><label for="new-farm-price">Precio de ejemplo</label><input id="new-farm-price" name="price" type="number" min="0" required></div><button class="button" type="submit">Añadir finca</button></form>
+    if (adminTab === "content") body = `<h2>${usingFirebaseData() ? "Gestionar catálogos" : "Administrar el contenido de esta demo"}</h2><div class="grid grid-3"><form class="panel" id="add-farm-form"><h3>Añadir una finca</h3><div class="field"><label for="new-farm-name">Nombre</label><input id="new-farm-name" name="name" required></div><div class="field"><label for="new-farm-place">Municipio</label><input id="new-farm-place" name="place" required></div><div class="field"><label for="new-farm-price">Precio de ejemplo</label><input id="new-farm-price" name="price" type="number" min="0" required></div><button class="button" type="submit">Añadir finca</button></form>
       <form class="panel" id="add-procedure-form"><h3>Añadir un trámite de práctica</h3><div class="field"><label for="new-procedure-name">Nombre</label><input id="new-procedure-name" name="name" required></div><div class="field"><label for="new-procedure-org">Entidad de referencia</label><input id="new-procedure-org" name="organization" required></div><button class="button" type="submit">Añadir trámite</button></form>
       <form class="panel" id="add-lesson-form"><h3>Añadir una lección</h3><div class="field"><label for="new-lesson-name">Título</label><input id="new-lesson-name" name="title" required></div><div class="field"><label for="new-lesson-body">Texto para leer y escuchar</label><textarea id="new-lesson-body" name="body" required></textarea></div><button class="button" type="submit">Añadir lección</button></form></div>${catalogEditors()}<p class="hint">Las fincas añadidas muestran texto; no solicitan imágenes externas.</p>`;
     if (adminTab === "pqrs") body = `<h2>Todas las solicitudes</h2>${state.pqrs.length ? `<div class="table-wrap"><table><thead><tr><th>Radicado</th><th>Solicitud</th><th>Mensaje</th><th>Estado / respuesta</th></tr></thead><tbody>${state.pqrs.map((item) => `<tr><td>${esc(item.number)}</td><td>${esc(item.type)} · ${esc(item.subject)}<br><span class="muted">${esc(item.ownerEmail || item.email || "")}</span></td><td>${esc(item.message)}</td><td><label class="sr-only" for="status-${esc(item.id)}">Estado de ${esc(item.number)}</label><select id="status-${esc(item.id)}" data-pqrs-status="${esc(item.id)}"><option value="Pendiente" ${item.status === "Pendiente" ? "selected" : ""}>Pendiente</option><option value="En proceso" ${item.status === "En proceso" ? "selected" : ""}>En proceso</option><option value="Resuelta" ${item.status === "Resuelta" ? "selected" : ""}>Resuelta</option></select><label class="sr-only" for="reply-${esc(item.id)}">Respuesta para ${esc(item.number)}</label><input class="inline-field" id="reply-${esc(item.id)}" data-pqrs-reply="${esc(item.id)}" value="${esc(item.reply || "")}" placeholder="Escribir respuesta"><button class="button small" type="button" data-reply="${esc(item.id)}">Guardar respuesta</button></td></tr>`).join("")}</tbody></table></div>` : `<p>No hay solicitudes por responder.</p>`}`;
     if (adminTab === "records") body = `<h2>Cobros y procesos de todos</h2><div class="table-wrap"><table><thead><tr><th>Usuario</th><th>Tipo</th><th>Detalle</th><th>Fecha / estado</th></tr></thead><tbody>${[...state.invoices.map((item) => ({ ...item, recordType: "Cobro", detail: `${item.number} · ${item.name}` })), ...state.bookings.map((item) => ({ ...item, recordType: "Reserva", detail: item.name })), ...state.completions.map((item) => ({ ...item, recordType: "Proceso", detail: item.label }))].map((item) => `<tr><td>${esc(item.ownerEmail || "")}</td><td>${esc(item.recordType)}</td><td>${esc(item.detail || "")}</td><td>${esc(item.date || item.status || "")}</td></tr>`).join("")}</tbody></table></div>`;
     if (adminTab === "contacts") body = `<h2>Mensajes recibidos</h2>${state.contacts.length ? `<div class="table-wrap"><table><thead><tr><th>Usuario</th><th>Asunto</th><th>Mensaje</th><th>Fecha</th></tr></thead><tbody>${state.contacts.map((item) => `<tr><td>${esc(item.ownerEmail || "")}</td><td>${esc(item.subject)}</td><td>${esc(item.message)}</td><td>${esc(item.date)}</td></tr>`).join("")}</tbody></table></div>` : `<p>No hay mensajes recibidos.</p>`}`;
-    return `<div class="page-wrap"><p class="eyebrow">Herramientas de administración</p><h1 class="page-heading">Administración</h1><p class="lead">${firebaseEnabled ? "Gestión de datos y cuentas del proyecto." : "Resumen y gestión local de la demostración."}</p><div class="admin-tools" role="group" aria-label="Secciones de administración">${tabs.map(([id, label]) => `<button class="button secondary small" type="button" data-admin-tab="${id}" aria-pressed="${adminTab === id}">${label}</button>`).join("")}</div><section class="panel">${body}</section></div>`;
+    return `<div class="page-wrap"><p class="eyebrow">Herramientas de administración</p><h1 class="page-heading">Administración</h1><p class="lead">${usingFirebaseData() ? "Gestión de datos y cuentas del proyecto." : "Resumen y gestión local de la demostración."}</p><div class="admin-tools" role="group" aria-label="Secciones de administración">${tabs.map(([id, label]) => `<button class="button secondary small" type="button" data-admin-tab="${id}" aria-pressed="${adminTab === id}">${label}</button>`).join("")}</div><section class="panel">${body}</section></div>`;
   }
 
   function renderAdminRequests() {
@@ -492,7 +610,8 @@
   }
 
   async function login(email, password, errorElement) {
-    if (firebaseEnabled) {
+    if (publicDemoActive) return false;
+    if (firebaseEnabled && !demoMode) {
       try {
         await firebaseAuth.signInWithEmailAndPassword(email, password);
         loginErrorMessage = "";
@@ -530,6 +649,21 @@
   }
 
   document.addEventListener("click", (event) => {
+    const exitDemoButton = event.target.closest("[data-exit-demo]");
+    if (exitDemoButton) { exitPublicDemo(); return; }
+    const startDemoButton = event.target.closest("[data-start-demo]");
+    if (startDemoButton) { startPublicDemo(); return; }
+    const demoRoleButton = event.target.closest("[data-demo-role]");
+    if (demoRoleButton && publicDemoActive) {
+      const user = state.users.find((item) => item.role === demoRoleButton.dataset.demoRole);
+      if (user) {
+        state.session = { ...user, demoOnly: true };
+        view = "home";
+        save();
+        render();
+      }
+      return;
+    }
     const route = event.target.closest("[data-route]");
     if (route) { event.preventDefault(); if (route.dataset.adminTab) adminTab = route.dataset.adminTab; setRoute(route.dataset.route); return; }
     const loginButton = event.target.closest("[data-login]");
@@ -699,7 +833,7 @@
       const values = formValues(form);
       const farm = state.farms.find((item) => item.id === values.farmId);
       state.bookings.push({ type: "booking", id: makeId("res"), ...ownerFields(), name: farm?.name || "Finca", date: values.date, people: values.people, phone: values.phone, status: "Solicitud guardada", label: farm?.name || "Finca" });
-      save(); bookingFarm = ""; setRoute("processes"); announce(firebaseEnabled ? "Solicitud de reserva guardada en tu cuenta." : "Solicitud de reserva guardada en este dispositivo."); return;
+      save(); bookingFarm = ""; setRoute("processes"); announce(usingFirebaseData() ? "Solicitud de reserva guardada en tu cuenta." : "Solicitud de reserva guardada en este dispositivo."); return;
     }
     if (form.id === "farm-owner-form" && !isAdmin()) {
       const values = formValues(form);
@@ -809,6 +943,13 @@
     requestedRole = "user";
     registrationNotice = "";
     loginErrorMessage = "";
+    if (publicDemoActive) {
+      state.session = null;
+      view = "demo-role";
+      save();
+      render();
+      return;
+    }
     if (firebaseEnabled) { await firebaseAuth.signOut(); return; }
     state.session = null; save(); view = "login"; render();
   });
@@ -840,24 +981,5 @@
     const route = window.location.hash.slice(1);
     if (route && authReady) setRoute(route);
   });
-  if (firebaseEnabled) {
-    firebaseAuth.setPersistence(firebase.auth.Auth.Persistence.LOCAL).then(() => {
-      firebaseAuth.onAuthStateChanged((authUser) => {
-        if (firebaseRegistrationPending) return;
-        if (!authUser) {
-          if (profileSubscription) { profileSubscription(); profileSubscription = null; }
-          state.session = null;
-          view = "login";
-          authReady = true;
-          render();
-          return;
-        }
-        bootstrapFirebaseUser(authUser);
-      });
-    }).catch(() => {
-      authReady = true;
-      loginErrorMessage = "No fue posible inicializar Firebase Authentication.";
-      render();
-    });
-  }
+  if (firebaseEnabled && !publicDemoActive) startFirebaseAuth();
 })();

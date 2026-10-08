@@ -85,6 +85,12 @@ button { cursor: pointer; }
 .login-art { width: 100%; max-width: 390px; aspect-ratio: 1.5; margin-top: 28px; border-radius: 5px; background: linear-gradient(170deg, transparent 45%, #719257 46% 63%, transparent 64%), linear-gradient(180deg, #cfe7df 0 55%, #f1d48b 56%); }
 .login-panel { padding: 26px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface); box-shadow: 0 12px 30px #263b2510; }
 .login-panel h2 { margin-top: 0; color: var(--green-dark); }
+.demo-entry { margin-top: 12px; }
+.demo-entry > .button { width: 100%; }
+.demo-entry .hint { margin-bottom: 0; }
+.demo-banner { position: sticky; top: 0; z-index: 5; display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 8px 16px; padding: 10px 16px; border-bottom: 1px solid #b99d43; background: #fff3c2; color: #382d0d; font-weight: 700; text-align: center; }
+.demo-role-panel { max-width: 720px; margin: 0 auto; }
+.demo-role-panel .page-heading { font-size: 2rem; }
 .demo-options { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
 .demo-options .button { flex: 1; }
 .role-picker { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin: 16px 0; }
@@ -145,6 +151,7 @@ body.dark-mode {
   --surface: #202a23; --line: #526254; --focus: #ffd36d;
 }
 body.dark-mode .primary-nav { background: #202a23; }
+body.dark-mode .demo-banner { border-color: #9e8640; background: #39331d; color: #fff2bd; }
 body.dark-mode .nav-link[aria-current="page"] { color: #172219; }
 body.dark-mode .role-picker .button[aria-pressed="true"] { color: #172219; }
 body.dark-mode .welcome-band { background: #243c2d; }
@@ -171,6 +178,7 @@ body.dark-mode .step-indicator .current .step-number, body.dark-mode .step-indic
   .welcome-art { min-height: 120px; }
   .allies { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .site-footer { padding-inline: 16px; }
+  .demo-banner { padding-inline: 12px; }
 }
 
 @media (max-width: 420px) {
