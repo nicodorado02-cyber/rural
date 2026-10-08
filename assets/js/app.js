@@ -43,6 +43,9 @@
   let editingFarmId = "";
   let invoiceStep = 0;
   let adminTab = "overview";
+  let selectedPqrsId = "";
+  let pqrsFilterStatus = "Todos";
+  let pqrsFilterType = "Todos";
   let invoiceDraft = { name: "", document: "", product: "", quantity: 1, price: 0, note: "" };
 
   function hasStoredPublicDemo() {
@@ -276,7 +279,12 @@
         procedures: mergeCatalog(window.AgroData.procedures, procedures),
         farms: mergeCatalog(window.AgroData.farms, farms),
         lessons: mergeCatalog(window.AgroData.lessons, lessons),
-        bookings, invoices, completions, pqrs, contacts
+        bookings, invoices, completions,
+        pqrs: pqrs.map((item) => ({
+          ...item,
+          status: ({ "Recibida": "Pendiente", "En revisión": "En proceso", "Respondida": "Resuelta" })[item.status] || item.status || "Pendiente"
+        })),
+        contacts
       };
       cloudSnapshot = cloudStateSnapshot();
       if (profileSubscription) profileSubscription();
@@ -476,7 +484,7 @@
       <div class="grid grid-3">
         ${adminTile("users", "♙", "Gestionar usuarios", "Consulta roles y estado de las cuentas.")}
         ${adminTile("content", "▤", "Ver todos los trámites", "Administra el catálogo de prácticas.")}
-        ${adminTile("pqrs", "♡", "Revisar PQRS pendientes", "Lee y responde las solicitudes.")}
+        ${adminTile("pqrs", "♡", "Revisar PQRS pendientes", "Revisa y responde las solicitudes de los usuarios.")}
         ${adminTile("records", "$", "Ver cobros de todos", "Consulta cuentas de cobro registradas.")}
         ${adminTile("contacts", "✉", "Ver mensajes de contacto", "Consulta los mensajes recibidos.")}
         ${adminTile("content", "Aa", "Gestionar lecciones", "Administra el catálogo de aprendizaje.")}
@@ -556,9 +564,38 @@
   }
 
   function renderPqrs() {
+    if (isAdmin()) return renderAdminPqrs();
     const requests = visibleRecords(state.pqrs);
-    return `<div class="page-wrap"><p class="eyebrow">Estamos para escucharte</p><h1 class="page-heading">Peticiones y ayuda</h1><p class="lead">Cuéntanos qué necesitas. Recibirás un número de radicado para consultar el estado ${usingFirebaseData() ? "en tu cuenta" : "en este dispositivo"}.</p><div class="grid grid-2"><section class="panel"><h2>Escribir una solicitud</h2><form id="pqrs-form"><div class="field"><label for="pqrs-type">Tipo de solicitud</label><select id="pqrs-type" name="type"><option>Petición</option><option>Queja</option><option>Reclamo</option><option>Sugerencia</option></select></div><div class="field"><label for="pqrs-subject">Tema</label><input id="pqrs-subject" name="subject" required maxlength="80"></div><div class="field"><label for="pqrs-message">¿Cómo podemos ayudarte?</label><textarea id="pqrs-message" name="message" required maxlength="1000"></textarea></div><button class="button" type="submit">Radicar solicitud</button><p class="hint">No incluyas claves ni datos bancarios. La solicitud no se envía a una entidad pública desde esta plataforma.</p></form></section>
+    return `<div class="page-wrap"><p class="eyebrow">Estamos para escucharte</p><h1 class="page-heading">Peticiones y ayuda</h1><p class="lead">Cuéntanos qué necesitas. Recibirás un número de radicado para consultar el estado ${usingFirebaseData() ? "en tu cuenta" : "en este dispositivo"}.</p><div class="grid grid-2"><section class="panel"><h2>Escribir una solicitud</h2><form id="pqrs-form"><div class="field"><label for="pqrs-type">Tipo de solicitud</label><select id="pqrs-type" name="type"><option>Petición</option><option>Queja</option><option>Reclamo</option><option>Sugerencia</option></select></div><div class="field"><label for="pqrs-subject">Tema</label><input id="pqrs-subject" name="subject" required maxlength="80"></div><div class="field"><label for="pqrs-message">Descripción</label><textarea id="pqrs-message" name="message" required maxlength="1000"></textarea></div><button class="button" type="submit">Radicar solicitud</button><p class="hint">No incluyas claves ni datos bancarios. La solicitud no se envía a una entidad pública desde esta plataforma.</p></form></section>
       <section class="panel"><h2>Mis radicados</h2>${requests.length ? `<ul class="record-list">${[...requests].reverse().map((item) => `<li><span><strong>${esc(item.number)}</strong><br>${esc(item.type)} · ${esc(item.subject)}${item.reply ? `<br><span class="muted">Respuesta: ${esc(item.reply)}</span>` : ""}</span><span class="status">${esc(item.status)}</span></li>`).join("")}</ul>` : `<p class="muted">Cuando radiques una solicitud, aparecerá aquí su número y estado.</p>`}</section></div></div>`;
+  }
+
+  function pqrsDateValue(item) {
+    const value = item.createdAt?.toDate ? item.createdAt.toDate() : new Date(item.createdAt || item.date || "");
+    return Number.isNaN(value.getTime()) ? 0 : value.getTime();
+  }
+
+  function formatPqrsDate(item) {
+    const timestamp = pqrsDateValue(item);
+    return timestamp ? new Intl.DateTimeFormat("es-CO", { dateStyle: "medium", timeStyle: "short" }).format(timestamp) : item.date || "No disponible";
+  }
+
+  function pqrsOwnerName(item) {
+    const profile = state.users.find((user) => user.id === item.ownerId || user.email === (item.ownerEmail || item.email));
+    return item.ownerName || profile?.name || "No disponible";
+  }
+
+  function renderAdminPqrs() {
+    const pendingCount = state.pqrs.filter((item) => item.status === "Pendiente").length;
+    const selected = selectedPqrsId ? state.pqrs.find((item) => item.id === selectedPqrsId) : null;
+    if (selected) {
+      return `<div class="pqrs-detail"><div class="section-title"><h2>Radicado ${esc(selected.number)}</h2><button class="button secondary small" type="button" data-action="pqrs-back">Volver a la lista</button></div><dl><dt>Nombre</dt><dd>${esc(pqrsOwnerName(selected))}</dd><dt>Correo</dt><dd>${esc(selected.ownerEmail || selected.email || "No disponible")}</dd><dt>Tipo</dt><dd>${esc(selected.type)}</dd><dt>Tema</dt><dd>${esc(selected.subject)}</dd><dt>Fecha</dt><dd>${esc(formatPqrsDate(selected))}</dd><dt>Descripción</dt><dd>${esc(selected.message)}</dd></dl><form id="admin-pqrs-form" data-pqrs-id="${esc(selected.id)}"><div class="field"><label for="admin-pqrs-status">Estado</label><select id="admin-pqrs-status" name="status"><option value="Pendiente" ${selected.status === "Pendiente" ? "selected" : ""}>Pendiente</option><option value="En proceso" ${selected.status === "En proceso" ? "selected" : ""}>En proceso</option><option value="Resuelta" ${selected.status === "Resuelta" ? "selected" : ""}>Resuelta</option></select></div><div class="field"><label for="admin-pqrs-reply">Respuesta</label><textarea id="admin-pqrs-reply" name="reply" maxlength="2000">${esc(selected.reply || "")}</textarea></div><button class="button" type="submit">Guardar respuesta y estado</button></form></div>`;
+    }
+    const filtered = [...state.pqrs]
+      .filter((item) => pqrsFilterStatus === "Todos" || item.status === pqrsFilterStatus)
+      .filter((item) => pqrsFilterType === "Todos" || item.type === pqrsFilterType)
+      .sort((a, b) => pqrsDateValue(b) - pqrsDateValue(a));
+    return `<div class="pqrs-admin"><div class="section-title"><h2>Todas las PQRS</h2></div><div class="stat pqrs-pending-count"><strong>${pendingCount}</strong><span>PQRS pendientes</span></div><div class="pqrs-filters"><div class="field"><label for="pqrs-filter-status">Filtrar por estado</label><select id="pqrs-filter-status" data-pqrs-filter-status><option ${pqrsFilterStatus === "Todos" ? "selected" : ""}>Todos</option><option ${pqrsFilterStatus === "Pendiente" ? "selected" : ""}>Pendiente</option><option ${pqrsFilterStatus === "En proceso" ? "selected" : ""}>En proceso</option><option ${pqrsFilterStatus === "Resuelta" ? "selected" : ""}>Resuelta</option></select></div><div class="field"><label for="pqrs-filter-type">Filtrar por tipo</label><select id="pqrs-filter-type" data-pqrs-filter-type><option ${pqrsFilterType === "Todos" ? "selected" : ""}>Todos</option>${["Petición", "Queja", "Reclamo", "Sugerencia"].map((type) => `<option ${pqrsFilterType === type ? "selected" : ""}>${type}</option>`).join("")}</select></div></div>${filtered.length ? `<div class="table-wrap"><table><thead><tr><th>Radicado</th><th>Persona</th><th>Tipo</th><th>Tema</th><th>Fecha</th><th>Estado</th><th></th></tr></thead><tbody>${filtered.map((item) => `<tr><td>${esc(item.number)}</td><td>${esc(pqrsOwnerName(item))}<br><span class="muted">${esc(item.ownerEmail || item.email || "No disponible")}</span></td><td>${esc(item.type)}</td><td>${esc(item.subject)}</td><td>${esc(formatPqrsDate(item))}</td><td><span class="status">${esc(item.status)}</span></td><td><button class="button secondary small" type="button" data-open-pqrs="${esc(item.id)}">Abrir</button></td></tr>`).join("")}</tbody></table></div>` : `<p class="muted">No hay solicitudes para estos filtros.</p>`}</div>`;
   }
 
   function renderContact() {
@@ -576,7 +613,7 @@
     if (adminTab === "content") body = `<h2>${usingFirebaseData() ? "Gestionar catálogos" : "Administrar el contenido de esta demo"}</h2><div class="grid grid-3"><form class="panel" id="add-farm-form"><h3>Añadir una finca</h3><div class="field"><label for="new-farm-name">Nombre</label><input id="new-farm-name" name="name" required></div><div class="field"><label for="new-farm-place">Municipio</label><input id="new-farm-place" name="place" required></div><div class="field"><label for="new-farm-price">Precio de ejemplo</label><input id="new-farm-price" name="price" type="number" min="0" required></div><button class="button" type="submit">Añadir finca</button></form>
       <form class="panel" id="add-procedure-form"><h3>Añadir un trámite de práctica</h3><div class="field"><label for="new-procedure-name">Nombre</label><input id="new-procedure-name" name="name" required></div><div class="field"><label for="new-procedure-org">Entidad de referencia</label><input id="new-procedure-org" name="organization" required></div><button class="button" type="submit">Añadir trámite</button></form>
       <form class="panel" id="add-lesson-form"><h3>Añadir una lección</h3><div class="field"><label for="new-lesson-name">Título</label><input id="new-lesson-name" name="title" required></div><div class="field"><label for="new-lesson-body">Texto para leer y escuchar</label><textarea id="new-lesson-body" name="body" required></textarea></div><button class="button" type="submit">Añadir lección</button></form></div>${catalogEditors()}<p class="hint">Las fincas añadidas muestran texto; no solicitan imágenes externas.</p>`;
-    if (adminTab === "pqrs") body = `<h2>Todas las solicitudes</h2>${state.pqrs.length ? `<div class="table-wrap"><table><thead><tr><th>Radicado</th><th>Solicitud</th><th>Mensaje</th><th>Estado / respuesta</th></tr></thead><tbody>${state.pqrs.map((item) => `<tr><td>${esc(item.number)}</td><td>${esc(item.type)} · ${esc(item.subject)}<br><span class="muted">${esc(item.ownerEmail || item.email || "")}</span></td><td>${esc(item.message)}</td><td><label class="sr-only" for="status-${esc(item.id)}">Estado de ${esc(item.number)}</label><select id="status-${esc(item.id)}" data-pqrs-status="${esc(item.id)}"><option value="Pendiente" ${item.status === "Pendiente" ? "selected" : ""}>Pendiente</option><option value="En proceso" ${item.status === "En proceso" ? "selected" : ""}>En proceso</option><option value="Resuelta" ${item.status === "Resuelta" ? "selected" : ""}>Resuelta</option></select><label class="sr-only" for="reply-${esc(item.id)}">Respuesta para ${esc(item.number)}</label><input class="inline-field" id="reply-${esc(item.id)}" data-pqrs-reply="${esc(item.id)}" value="${esc(item.reply || "")}" placeholder="Escribir respuesta"><button class="button small" type="button" data-reply="${esc(item.id)}">Guardar respuesta</button></td></tr>`).join("")}</tbody></table></div>` : `<p>No hay solicitudes por responder.</p>`}`;
+    if (adminTab === "pqrs") body = renderAdminPqrs();
     if (adminTab === "records") body = `<h2>Cobros y procesos de todos</h2><div class="table-wrap"><table><thead><tr><th>Usuario</th><th>Tipo</th><th>Detalle</th><th>Fecha / estado</th></tr></thead><tbody>${[...state.invoices.map((item) => ({ ...item, recordType: "Cobro", detail: `${item.number} · ${item.name}` })), ...state.bookings.map((item) => ({ ...item, recordType: "Reserva", detail: item.name })), ...state.completions.map((item) => ({ ...item, recordType: "Proceso", detail: item.label }))].map((item) => `<tr><td>${esc(item.ownerEmail || "")}</td><td>${esc(item.recordType)}</td><td>${esc(item.detail || "")}</td><td>${esc(item.date || item.status || "")}</td></tr>`).join("")}</tbody></table></div>`;
     if (adminTab === "contacts") body = `<h2>Mensajes recibidos</h2>${state.contacts.length ? `<div class="table-wrap"><table><thead><tr><th>Usuario</th><th>Asunto</th><th>Mensaje</th><th>Fecha</th></tr></thead><tbody>${state.contacts.map((item) => `<tr><td>${esc(item.ownerEmail || "")}</td><td>${esc(item.subject)}</td><td>${esc(item.message)}</td><td>${esc(item.date)}</td></tr>`).join("")}</tbody></table></div>` : `<p>No hay mensajes recibidos.</p>`}`;
     return `<div class="page-wrap"><p class="eyebrow">Herramientas de administración</p><h1 class="page-heading">Administración</h1><p class="lead">${usingFirebaseData() ? "Gestión de datos y cuentas del proyecto." : "Resumen y gestión local de la demostración."}</p><div class="admin-tools" role="group" aria-label="Secciones de administración">${tabs.map(([id, label]) => `<button class="button secondary small" type="button" data-admin-tab="${id}" aria-pressed="${adminTab === id}">${label}</button>`).join("")}</div><section class="panel">${body}</section></div>`;
@@ -668,7 +705,15 @@
     const startDemoButton = event.target.closest("[data-start-demo]");
     if (startDemoButton) { startPublicDemo(); return; }
     const route = event.target.closest("[data-route]");
-    if (route) { event.preventDefault(); if (route.dataset.adminTab) adminTab = route.dataset.adminTab; setRoute(route.dataset.route); return; }
+    if (route) {
+      event.preventDefault();
+      if (route.dataset.adminTab) {
+        adminTab = route.dataset.adminTab;
+        if (adminTab === "pqrs") { pqrsFilterStatus = "Pendiente"; pqrsFilterType = "Todos"; selectedPqrsId = ""; }
+      }
+      setRoute(route.dataset.route);
+      return;
+    }
     const loginButton = event.target.closest("[data-login]");
     if (loginButton) { login(loginButton.dataset.login); return; }
     const roleButton = event.target.closest("[data-role]");
@@ -734,11 +779,14 @@
       save(); selectedProcedure = ""; procedureAnswers = []; setRoute("procedures"); announce("¡Muy bien! Terminaste la práctica."); return;
     }
     if (action === "cancel-booking") { bookingFarm = ""; render(); return; }
+    if (action === "pqrs-back" && isAdmin()) { selectedPqrsId = ""; render(); return; }
     if (action === "cancel-farm-edit") { editingFarmId = ""; render(); return; }
     if (action === "invoice-back") { invoiceStep = Math.max(0, invoiceStep - 1); render(); return; }
     if (action === "print") { window.print(); return; }
     const printInvoice = event.target.closest("[data-print-invoice]");
     if (printInvoice) { printSavedInvoice(printInvoice.dataset.printInvoice); return; }
+    const openPqrs = event.target.closest("[data-open-pqrs]");
+    if (openPqrs && isAdmin()) { selectedPqrsId = openPqrs.dataset.openPqrs; render(); main.focus({ preventScroll: true }); return; }
     const admin = event.target.closest("[data-admin-tab]");
     if (admin) { adminTab = admin.dataset.adminTab; render(); return; }
     const toggleUser = event.target.closest("[data-toggle-user]");
@@ -772,8 +820,6 @@
       }
       return;
     }
-    const reply = event.target.closest("[data-reply]");
-    if (reply) { saveReply(reply.dataset.reply); return; }
   });
 
   main.addEventListener("submit", async (event) => {
@@ -863,8 +909,22 @@
     }
     if (form.id === "pqrs-form") {
       const values = formValues(form);
-      const item = { id: makeId("pqrs"), ...ownerFields(), type: "pqrs", number: `AC-${Date.now().toString().slice(-6)}`, email: state.session.email, ...values, status: "Pendiente", date: new Date().toLocaleDateString("es-CO") };
+      const item = {
+        id: makeId("pqrs"), ownerId: state.session.id, ownerName: state.session.name,
+        ownerEmail: state.session.email, number: `AC-${Date.now().toString().slice(-6)}`,
+        type: values.type, subject: values.subject.trim(), message: values.message.trim(), status: "Pendiente",
+        createdAt: usingFirebaseData() ? firebase.firestore.FieldValue.serverTimestamp() : new Date().toISOString()
+      };
       state.pqrs.push(item); save(); setRoute("pqrs"); announce(`Solicitud radicada con el número ${item.number}.`); return;
+    }
+    if (form.id === "admin-pqrs-form" && isAdmin()) {
+      const item = state.pqrs.find((entry) => entry.id === form.dataset.pqrsId);
+      if (!item) return;
+      const values = formValues(form);
+      item.status = values.status;
+      item.reply = values.reply.trim();
+      save(); render(); announce("Respuesta y estado de la PQRS actualizados.");
+      return;
     }
     if (form.id === "add-farm-form") {
       if (!isAdmin()) return;
@@ -903,6 +963,10 @@
   });
 
   main.addEventListener("change", (event) => {
+    const pqrsStatusFilter = event.target.closest("[data-pqrs-filter-status]");
+    if (pqrsStatusFilter && isAdmin()) { pqrsFilterStatus = pqrsStatusFilter.value; render(); return; }
+    const pqrsTypeFilter = event.target.closest("[data-pqrs-filter-type]");
+    if (pqrsTypeFilter && isAdmin()) { pqrsFilterType = pqrsTypeFilter.value; render(); return; }
     const roleSelect = event.target.closest("[data-user-role]");
     if (roleSelect && isAdmin()) {
       const user = state.users.find((item) => item.id === roleSelect.dataset.userRole);
@@ -916,22 +980,7 @@
         render();
       }
     }
-    const statusSelect = event.target.closest("[data-pqrs-status]");
-    if (statusSelect && isAdmin()) {
-      const item = state.pqrs.find((entry) => entry.id === statusSelect.dataset.pqrsStatus);
-      if (item) { item.status = statusSelect.value; save(); }
-    }
   });
-
-  function saveReply(id) {
-    if (!isAdmin()) return;
-    const item = state.pqrs.find((entry) => entry.id === id);
-    const input = document.querySelector(`[data-pqrs-reply="${CSS.escape(id)}"]`);
-    if (!item || !input) return;
-    item.reply = input.value.trim();
-    if (item.reply) item.status = "Resuelta";
-    save(); render(); announce("Respuesta guardada.");
-  }
 
   function printSavedInvoice(id) {
     const invoice = state.invoices.find((item) => item.id === id);

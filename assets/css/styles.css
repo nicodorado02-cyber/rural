@@ -124,6 +124,12 @@ button { cursor: pointer; }
 .status { display: inline-block; padding: 4px 10px; border-radius: 99px; background: #f6e8bb; color: #513c06; font-size: 1rem; font-weight: 700; }
 .status.done { background: var(--green-soft); color: var(--green-dark); }
 .table-wrap { overflow-x: auto; }
+.pqrs-pending-count { width: min(100%, 260px); margin-bottom: 16px; }
+.pqrs-filters { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; max-width: 620px; }
+.pqrs-detail dl { display: grid; grid-template-columns: minmax(110px, .35fr) minmax(0, 1fr); gap: 8px 16px; margin: 0 0 22px; }
+.pqrs-detail dt { font-weight: 700; }
+.pqrs-detail dd { min-width: 0; margin: 0; overflow-wrap: anywhere; white-space: pre-wrap; }
+.pqrs-detail form { max-width: 760px; }
 table { width: 100%; border-collapse: collapse; text-align: left; }
 th, td { padding: 12px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
 th { color: var(--green-dark); }
@@ -178,6 +184,9 @@ body.dark-mode .step-indicator .current .step-number, body.dark-mode .step-indic
   .allies { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .site-footer { padding-inline: 16px; }
   .demo-banner { padding-inline: 12px; }
+  .pqrs-filters { grid-template-columns: 1fr; gap: 0; }
+  .pqrs-detail dl { grid-template-columns: minmax(0, 1fr); gap: 3px; }
+  .pqrs-detail dd { margin-bottom: 10px; }
 }
 
 @media (max-width: 420px) {

@@ -105,11 +105,33 @@ service cloud.firestore {
 
     match /pqrs/{requestId} {
       allow create: if createsOwnRecord()
+        && request.resource.data.keys().hasAll([
+          'ownerId', 'ownerName', 'ownerEmail', 'number', 'type', 'subject', 'message', 'status', 'createdAt'
+        ])
+        && request.resource.data.keys().hasOnly([
+          'ownerId', 'ownerName', 'ownerEmail', 'number', 'type', 'subject', 'message', 'status', 'createdAt'
+        ])
+        && request.resource.data.ownerName == get(/databases/$(database)/documents/users/$(request.auth.uid)).data.name
+        && request.resource.data.number is string
+        && request.resource.data.number.size() > 0
+        && request.resource.data.number.size() <= 32
+        && request.resource.data.type in ['Petición', 'Queja', 'Reclamo', 'Sugerencia']
+        && request.resource.data.subject is string
+        && request.resource.data.subject.size() > 0
+        && request.resource.data.subject.size() <= 80
+        && request.resource.data.message is string
+        && request.resource.data.message.size() > 0
+        && request.resource.data.message.size() <= 1000
         && request.resource.data.status == 'Pendiente'
+        && request.resource.data.createdAt == request.time
         && !('reply' in request.resource.data);
       allow read: if isAdmin() || ownsRecord();
-      allow update: if isAdmin();
-      allow delete: if isAdmin();
+      allow update: if isAdmin()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'reply'])
+        && request.resource.data.status in ['Pendiente', 'En proceso', 'Resuelta']
+        && (!('reply' in request.resource.data)
+          || (request.resource.data.reply is string && request.resource.data.reply.size() <= 2000));
+      allow delete: if false;
     }
 
     match /contacts/{messageId} {
