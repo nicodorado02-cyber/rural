@@ -25,6 +25,8 @@
   let view = state.session ? "home" : "login";
   let loginMode = false;
   let requestedRole = "user";
+  let requestedRegistrationRole = "user";
+  let registrationNotice = "";
   let selectedProcedure = "";
   let procedureStep = 0;
   let procedureAnswers = [];
@@ -38,8 +40,8 @@
     return {
       session: null,
       users: firebaseEnabled ? [] : [
-        { id: "demo-admin", email: "admin@demo.com", name: "Rosa Administradora", role: "admin", disabled: false },
-        { id: "demo-user", email: "usuario@demo.com", name: "María Productora", role: "user", disabled: false }
+        { id: "demo-admin", email: "admin@demo.com", name: "Rosa Administradora", role: "admin", adminRequest: "no_solicitada", disabled: false },
+        { id: "demo-user", email: "usuario@demo.com", name: "María Productora", role: "user", adminRequest: "no_solicitada", disabled: false }
       ],
       procedures: window.AgroData.procedures,
       farms: window.AgroData.farms,
@@ -57,6 +59,7 @@
       const users = (saved.users || initial.users).map((user, index) => ({
         ...user,
         id: user.id || `legacy-user-${index}`,
+        adminRequest: user.adminRequest || "no_solicitada",
         disabled: Boolean(user.disabled)
       }));
       const sessionUser = saved.session ? users.find((user) => user.email === saved.session.email) : null;
@@ -128,13 +131,15 @@
       const profileReference = firestore.collection("users").doc(authUser.uid);
       let profileDocument = await profileReference.get();
       if (!profileDocument.exists) {
-        await profileReference.set({ email: authUser.email, name: authUser.displayName || authUser.email, role: "user", disabled: false });
+        await profileReference.set({ email: authUser.email, name: authUser.displayName || authUser.email, role: "user", disabled: false, adminRequest: "no_solicitada" });
         profileDocument = await profileReference.get();
       }
       const profile = profileDocument.data();
       if (profile.disabled) throw new Error("disabled-profile");
       if (requestedRole === "admin" && profile.role !== "admin") {
-        loginErrorMessage = "Esta cuenta no tiene permisos de administrador.";
+        loginErrorMessage = profile.adminRequest === "pendiente"
+          ? "Tu solicitud de administrador aún no ha sido aprobada."
+          : "Esta cuenta no tiene permisos de administrador.";
         throw new Error("role-mismatch");
       }
       if (!["user", "admin"].includes(profile.role)) throw new Error("invalid-role");
@@ -307,13 +312,14 @@
       <p class="lead">Practica trámites, comparte lo que haces y aprende a tu ritmo. Un paso sencillo a la vez.</p>
       <div class="login-art" role="img" aria-label="Ilustración de montañas y campos de cultivo"></div></section>
       <section class="login-panel" aria-labelledby="login-title"><h2 id="login-title">${loginMode ? "Crear una cuenta" : requestedRole === "admin" ? "Acceso de administrador" : "Bienvenido, bienvenida"}</h2>
-      <p class="muted">${loginMode ? "Regístrate para empezar. Tu cuenta tendrá permisos de usuario." : "Ingresa con tu correo y contraseña."}</p>
+      <p class="muted">${loginMode ? requestedRegistrationRole === "admin" ? "Tu cuenta se creará como usuario y tu solicitud de administrador quedará pendiente de aprobación." : "Tu cuenta tendrá permisos de usuario." : "Ingresa con tu correo y contraseña."}</p>
       ${loginMode ? "" : `<div class="role-picker" role="group" aria-label="Tipo de acceso"><button class="button secondary" type="button" data-role="user" aria-pressed="${requestedRole === "user"}"><span aria-hidden="true">♙</span> Soy usuario</button><button class="button secondary" type="button" data-role="admin" aria-pressed="${requestedRole === "admin"}"><span aria-hidden="true">♜</span> Soy administrador</button></div>`}
       <form id="login-form" novalidate>
         ${loginMode ? `<div class="field"><label for="login-name">Tu nombre</label><input id="login-name" name="name" autocomplete="name" required></div>` : ""}
         <div class="field"><label for="login-email">Correo electrónico</label><input id="login-email" name="email" type="email" autocomplete="email" required placeholder="nombre@correo.com"></div>
         <div class="field"><label for="login-password">Contraseña</label><div class="password-field"><input id="login-password" name="password" type="password" autocomplete="${loginMode ? "new-password" : "current-password"}" required minlength="8"><button class="button secondary small" type="button" data-action="toggle-password" aria-label="Mostrar contraseña">Mostrar</button></div></div>
         <p class="form-error" id="login-error" role="alert" ${loginErrorMessage ? "" : "hidden"}>${esc(loginErrorMessage)}</p>
+        ${loginMode ? `<fieldset class="registration-role"><legend>Quiero registrarme como:</legend><div class="role-picker"><button class="button secondary" type="button" data-register-role="user" aria-pressed="${requestedRegistrationRole === "user"}">Usuario</button><button class="button secondary" type="button" data-register-role="admin" aria-pressed="${requestedRegistrationRole === "admin"}">Administrador</button></div></fieldset>` : ""}
         <button class="button" type="submit">${loginMode ? "Crear mi cuenta" : "Iniciar sesión"}</button>
       </form>
       ${requestedRole === "user" || loginMode ? `<button class="text-button" type="button" data-action="toggle-register">${loginMode ? "Ya tengo una cuenta" : "Crear cuenta"}</button>` : ""}
@@ -326,7 +332,7 @@
     const name = state.session.name.split(" ")[0];
     const recent = [...visibleRecords(state.completions), ...visibleRecords(state.bookings), ...visibleRecords(state.invoices), ...visibleRecords(state.pqrs)].slice(-3).reverse();
     const titles = { procedure: "Práctica de trámite", booking: "Reserva", invoice: "Cuenta de cobro", pqrs: "Solicitud PQRS" };
-    return `<div class="page-wrap"><section class="welcome-band"><div><p class="eyebrow">Bienvenida, ${esc(name)}</p><h1>¿Qué necesitas hacer hoy?</h1><p class="lead">Elige una opción y te acompañamos paso a paso.</p></div><div class="welcome-art" role="img" aria-label="Lomas verdes de cultivo"></div></section>
+    return `<div class="page-wrap">${registrationNotice ? `<p class="success-message" role="status">${esc(registrationNotice)}</p>` : ""}<section class="welcome-band"><div><p class="eyebrow">Bienvenida, ${esc(name)}</p><h1>¿Qué necesitas hacer hoy?</h1><p class="lead">Elige una opción y te acompañamos paso a paso.</p></div><div class="welcome-art" role="img" aria-label="Lomas verdes de cultivo"></div></section>
       <div class="grid grid-3">
         ${tile("procedures", "▤", "Practicar un trámite", "Ensaya sin riesgo y a tu ritmo.")}
         ${tile("tourism", "⌖", "Mostrar mi finca", "Conoce experiencias del campo.")}
@@ -443,10 +449,11 @@
   function renderAdmin() {
     if (!isAdmin()) return "";
     const counts = [["Cuentas de usuario", state.users.filter((user) => !user.disabled).length], ["Fincas publicadas", state.farms.length], ["Trámites de práctica", state.procedures.length], ["PQRS pendientes", state.pqrs.filter((item) => item.status === "Pendiente").length]];
-    const tabs = [["overview", "Resumen"], ["users", "Usuarios"], ["records", "Cobros y procesos"], ["content", "Contenido"], ["pqrs", "PQRS"], ["contacts", "Contacto"]];
+    const tabs = [["overview", "Resumen"], ["users", "Usuarios"], ["admin-requests", "Solicitudes de administrador"], ["records", "Cobros y procesos"], ["content", "Contenido"], ["pqrs", "PQRS"], ["contacts", "Contacto"]];
     let body = "";
     if (adminTab === "overview") body = `<div class="grid grid-2">${counts.map(([label, number]) => `<div class="stat"><strong>${number}</strong><span>${label}</span></div>`).join("")}</div><p class="hint">${firebaseEnabled ? "Los datos se cargan desde Firestore según el rol y la propiedad." : "Los datos son locales a este navegador y sirven para demostrar los roles."}</p>`;
     if (adminTab === "users") body = `<h2>${firebaseEnabled ? "Usuarios" : "Usuarios de demostración"}</h2><div class="table-wrap"><table><thead><tr><th>Nombre</th><th>Correo</th><th>Rol</th><th>Cuenta</th></tr></thead><tbody>${state.users.map((user, index) => `<tr><td>${esc(user.name)}</td><td>${esc(user.email)}</td><td><label class="sr-only" for="role-${index}">Rol de ${esc(user.email)}</label><select id="role-${index}" data-user-role="${esc(user.id)}" ${user.id === state.session.id ? "disabled" : ""}><option value="user" ${user.role !== "admin" ? "selected" : ""}>Usuario</option><option value="admin" ${user.role === "admin" ? "selected" : ""}>Administrador</option></select></td><td><button class="button secondary small" type="button" data-toggle-user="${esc(user.id)}" ${user.id === state.session.id ? "disabled" : ""}>${user.disabled ? "Activar" : "Desactivar"}</button></td></tr>`).join("")}</tbody></table></div>`;
+    if (adminTab === "admin-requests") body = renderAdminRequests();
     if (adminTab === "content") body = `<h2>${firebaseEnabled ? "Gestionar catálogos" : "Administrar el contenido de esta demo"}</h2><div class="grid grid-3"><form class="panel" id="add-farm-form"><h3>Añadir una finca</h3><div class="field"><label for="new-farm-name">Nombre</label><input id="new-farm-name" name="name" required></div><div class="field"><label for="new-farm-place">Municipio</label><input id="new-farm-place" name="place" required></div><div class="field"><label for="new-farm-price">Precio de ejemplo</label><input id="new-farm-price" name="price" type="number" min="0" required></div><button class="button" type="submit">Añadir finca</button></form>
       <form class="panel" id="add-procedure-form"><h3>Añadir un trámite de práctica</h3><div class="field"><label for="new-procedure-name">Nombre</label><input id="new-procedure-name" name="name" required></div><div class="field"><label for="new-procedure-org">Entidad de referencia</label><input id="new-procedure-org" name="organization" required></div><button class="button" type="submit">Añadir trámite</button></form>
       <form class="panel" id="add-lesson-form"><h3>Añadir una lección</h3><div class="field"><label for="new-lesson-name">Título</label><input id="new-lesson-name" name="title" required></div><div class="field"><label for="new-lesson-body">Texto para leer y escuchar</label><textarea id="new-lesson-body" name="body" required></textarea></div><button class="button" type="submit">Añadir lección</button></form></div>${catalogEditors()}<p class="hint">Las fincas añadidas muestran texto; no solicitan imágenes externas.</p>`;
@@ -454,6 +461,11 @@
     if (adminTab === "records") body = `<h2>Cobros y procesos de todos</h2><div class="table-wrap"><table><thead><tr><th>Usuario</th><th>Tipo</th><th>Detalle</th><th>Fecha / estado</th></tr></thead><tbody>${[...state.invoices.map((item) => ({ ...item, recordType: "Cobro", detail: `${item.number} · ${item.name}` })), ...state.bookings.map((item) => ({ ...item, recordType: "Reserva", detail: item.name })), ...state.completions.map((item) => ({ ...item, recordType: "Proceso", detail: item.label }))].map((item) => `<tr><td>${esc(item.ownerEmail || "")}</td><td>${esc(item.recordType)}</td><td>${esc(item.detail || "")}</td><td>${esc(item.date || item.status || "")}</td></tr>`).join("")}</tbody></table></div>`;
     if (adminTab === "contacts") body = `<h2>Mensajes recibidos</h2>${state.contacts.length ? `<div class="table-wrap"><table><thead><tr><th>Usuario</th><th>Asunto</th><th>Mensaje</th><th>Fecha</th></tr></thead><tbody>${state.contacts.map((item) => `<tr><td>${esc(item.ownerEmail || "")}</td><td>${esc(item.subject)}</td><td>${esc(item.message)}</td><td>${esc(item.date)}</td></tr>`).join("")}</tbody></table></div>` : `<p>No hay mensajes recibidos.</p>`}`;
     return `<div class="page-wrap"><p class="eyebrow">Herramientas de administración</p><h1 class="page-heading">Administración</h1><p class="lead">${firebaseEnabled ? "Gestión de datos y cuentas del proyecto." : "Resumen y gestión local de la demostración."}</p><div class="admin-tools" role="group" aria-label="Secciones de administración">${tabs.map(([id, label]) => `<button class="button secondary small" type="button" data-admin-tab="${id}" aria-pressed="${adminTab === id}">${label}</button>`).join("")}</div><section class="panel">${body}</section></div>`;
+  }
+
+  function renderAdminRequests() {
+    const pending = state.users.filter((user) => user.adminRequest === "pendiente");
+    return `<h2>Solicitudes de administrador</h2>${pending.length ? `<div class="table-wrap"><table><thead><tr><th>Nombre</th><th>Correo</th><th>Fecha</th><th>Acciones</th></tr></thead><tbody>${pending.map((user) => `<tr><td>${esc(user.name)}</td><td>${esc(user.email)}</td><td>${user.adminRequestDate ? esc(new Date(user.adminRequestDate).toLocaleString("es-CO")) : "No disponible"}</td><td><div class="button-row"><button class="button small" type="button" data-admin-request-action="aprobar" data-user-id="${esc(user.id)}">Aprobar</button><button class="button secondary small" type="button" data-admin-request-action="rechazar" data-user-id="${esc(user.id)}">Rechazar</button></div></td></tr>`).join("")}</tbody></table></div>` : `<p>No hay solicitudes pendientes.</p>`}`;
   }
 
   function catalogEditors() {
@@ -498,7 +510,9 @@
     if (requestedRole === "admin" && user.role !== "admin") {
       state.session = null;
       save();
-      error.textContent = "Esta cuenta no tiene permisos de administrador.";
+      error.textContent = user.adminRequest === "pendiente"
+        ? "Tu solicitud de administrador aún no ha sido aprobada."
+        : "Esta cuenta no tiene permisos de administrador.";
       return false;
     }
     state.session = { ...user };
@@ -522,6 +536,8 @@
     if (loginButton) { login(loginButton.dataset.login); return; }
     const roleButton = event.target.closest("[data-role]");
     if (roleButton) { requestedRole = roleButton.dataset.role; render(); return; }
+    const registerRoleButton = event.target.closest("[data-register-role]");
+    if (registerRoleButton && loginMode) { requestedRegistrationRole = registerRoleButton.dataset.registerRole; render(); return; }
     const procedure = event.target.closest("[data-procedure]");
     if (procedure) { selectedProcedure = procedure.dataset.procedure; procedureStep = 0; procedureAnswers = []; setRoute("procedures"); return; }
     const booking = event.target.closest("[data-book]");
@@ -554,7 +570,7 @@
       return;
     }
     const action = event.target.closest("[data-action]")?.dataset.action;
-    if (action === "toggle-register") { loginMode = !loginMode; requestedRole = "user"; render(); return; }
+    if (action === "toggle-register") { loginMode = !loginMode; requestedRole = "user"; requestedRegistrationRole = "user"; loginErrorMessage = ""; render(); return; }
     if (action === "toggle-password") {
       const input = document.querySelector("#login-password");
       if (input) {
@@ -598,6 +614,18 @@
       }
       return;
     }
+    const adminRequestAction = event.target.closest("[data-admin-request-action]");
+    if (adminRequestAction && isAdmin()) {
+      const user = state.users.find((item) => item.id === adminRequestAction.dataset.userId && item.adminRequest === "pendiente");
+      if (user) {
+        const approved = adminRequestAction.dataset.adminRequestAction === "aprobar";
+        user.adminRequest = approved ? "aprobada" : "rechazada";
+        if (approved) user.role = "admin";
+        save(); render();
+        announce(approved ? "Solicitud aprobada. La cuenta ahora es administradora." : "Solicitud rechazada.");
+      }
+      return;
+    }
     const deleteCatalog = event.target.closest("[data-delete-catalog]");
     if (deleteCatalog && isAdmin()) {
       const collection = deleteCatalog.dataset.deleteCatalog;
@@ -628,11 +656,22 @@
           try {
             const credential = await firebaseAuth.createUserWithEmailAndPassword(email, values.password);
             await credential.user.updateProfile({ displayName: values.name.trim() });
-            await firestore.collection("users").doc(credential.user.uid).set({ email, name: values.name.trim(), role: "user", disabled: false });
-            firebaseRegistrationPending = false;
+            const profile = {
+              email,
+              name: values.name.trim(),
+              role: "user",
+              disabled: false,
+              adminRequest: requestedRegistrationRole === "admin" ? "pendiente" : "no_solicitada"
+            };
+            if (profile.adminRequest === "pendiente") profile.adminRequestDate = new Date().toISOString();
+            await firestore.collection("users").doc(credential.user.uid).set(profile);
             loginMode = false;
             requestedRole = "user";
+            registrationNotice = requestedRegistrationRole === "admin"
+              ? "Tu cuenta fue creada como usuario. Tu solicitud de administrador está pendiente de aprobación."
+              : "";
             await bootstrapFirebaseUser(credential.user);
+            firebaseRegistrationPending = false;
           } catch (registrationError) {
             firebaseRegistrationPending = false;
             if (firebaseAuth.currentUser) await firebaseAuth.signOut();
@@ -641,8 +680,18 @@
           }
           return;
         }
-        const user = { id: makeId("user"), email, name: values.name.trim(), role: "user", disabled: false };
-        state.users.push(user); save(); await login(email, values.password, error);
+        const user = {
+          id: makeId("user"), email, name: values.name.trim(), role: "user", disabled: false,
+          adminRequest: requestedRegistrationRole === "admin" ? "pendiente" : "no_solicitada",
+          ...(requestedRegistrationRole === "admin" ? { adminRequestDate: new Date().toISOString() } : {})
+        };
+        state.users.push(user); save();
+        registrationNotice = requestedRegistrationRole === "admin"
+          ? "Tu cuenta fue creada como usuario. Tu solicitud de administrador está pendiente de aprobación."
+          : "";
+        loginMode = false;
+        requestedRole = "user";
+        await login(email, values.password, error);
       } else if (!(await login(email, values.password, error))) { error.hidden = false; }
       return;
     }
@@ -758,6 +807,7 @@
   logoutButton.addEventListener("click", async () => {
     selectedProcedure = "";
     requestedRole = "user";
+    registrationNotice = "";
     loginErrorMessage = "";
     if (firebaseEnabled) { await firebaseAuth.signOut(); return; }
     state.session = null; save(); view = "login"; render();

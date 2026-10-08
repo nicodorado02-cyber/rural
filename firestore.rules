@@ -30,6 +30,10 @@ service cloud.firestore {
         && request.resource.data.ownerEmail == request.auth.token.email;
     }
 
+    function validAdminRequest(value) {
+      return value in ['no_solicitada', 'pendiente', 'aprobada', 'rechazada'];
+    }
+
     match /users/{userId} {
       allow get: if signedIn() && (request.auth.uid == userId || isAdmin());
       allow list: if isAdmin();
@@ -37,13 +41,22 @@ service cloud.firestore {
         && request.auth.uid == userId
         && request.resource.data.role == 'user'
         && request.resource.data.disabled == false
-        && request.resource.data.email == request.auth.token.email;
-      allow update: if isAdmin()
+        && request.resource.data.email == request.auth.token.email
+        && request.resource.data.adminRequest in ['no_solicitada', 'pendiente']
+        && ((request.resource.data.adminRequest == 'pendiente'
+            && request.resource.data.adminRequestDate is string)
+          || (request.resource.data.adminRequest == 'no_solicitada'
+            && !('adminRequestDate' in request.resource.data)));
+      allow update: if (isAdmin()
+          && request.resource.data.role in ['user', 'admin']
+          && validAdminRequest(request.resource.data.get('adminRequest', 'no_solicitada')))
         || (activeUser()
           && request.auth.uid == userId
           && request.resource.data.role == resource.data.role
           && request.resource.data.disabled == resource.data.disabled
-          && request.resource.data.email == resource.data.email);
+          && request.resource.data.email == resource.data.email
+          && request.resource.data.get('adminRequest', 'no_solicitada') == resource.data.get('adminRequest', 'no_solicitada')
+          && request.resource.data.get('adminRequestDate', '') == resource.data.get('adminRequestDate', ''));
       allow delete: if false;
     }
 
