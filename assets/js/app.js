@@ -151,7 +151,7 @@
     firestore = firebaseApp.firestore();
     authReady = false;
     render();
-    firebaseAuth.setPersistence(firebase.auth.Auth.Persistence.LOCAL).then(() => {
+    firebaseAuth.setPersistence(firebase.auth.Auth.Persistence.SESSION).then(() => {
       if (demoMode || authSubscription) return;
       authSubscription = firebaseAuth.onAuthStateChanged((authUser) => {
         if (demoMode || firebaseRegistrationPending) return;
