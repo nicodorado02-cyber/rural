@@ -22,10 +22,6 @@
   ];
   const adminPage = ["admin", "Administración", "⚙"];
   let state = loadState();
-    if (firebaseEnabled && view === "tourism") {
-      const bookingHint = main.querySelector("#booking-form .hint");
-      if (bookingHint) bookingHint.textContent = "La solicitud se guarda en tu cuenta; no se envía directamente a la finca.";
-    }
   let view = state.session ? "home" : "login";
   let loginMode = false;
   let requestedRole = "user";
@@ -299,6 +295,10 @@
     if (routeDenied) view = state.session ? "home" : "login";
     main.innerHTML = (renderers[view] || renderHome)();
     if (routeDenied) announce("Acceso denegado", true);
+    if (firebaseEnabled && view === "tourism") {
+      const bookingHint = main.querySelector("#booking-form .hint");
+      if (bookingHint) bookingHint.textContent = "La solicitud se guarda en tu cuenta; no se envía directamente a la finca.";
+    }
   }
 
   function renderLogin() {
